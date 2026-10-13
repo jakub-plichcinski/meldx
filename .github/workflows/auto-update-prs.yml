@@ -1,0 +1,65 @@
+# Auto-update PR branches when main advances.
+#
+# Triggered on every push to main. Rebases all open, non-draft PRs targeting
+# main onto the latest main head. Eliminates the manual "Update branch" click.
+#
+# Managed by iac-github workflow-templates module. Do not edit directly —
+# changes will be overwritten on next apply.
+
+name: Auto-update PRs
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-update-prs
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update open PRs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebase open PRs onto main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Fetch all open, non-draft PRs targeting main
+          mapfile -t pr_numbers < <(
+            gh pr list \
+              --state open \
+              --base main \
+              --json number,isDraft \
+              --jq '.[] | select(.isDraft == false) | .number'
+          )
+
+          if [ ${#pr_numbers[@]} -eq 0 ]; then
+            echo "No open PRs to update."
+            exit 0
+          fi
+
+          updated=0
+          skipped=0
+          failed=0
+
+          for pr in "${pr_numbers[@]}"; do
+            if gh pr update-branch "$pr" --rebase 2>/dev/null; then
+              echo "✓ Updated PR #$pr"
+              ((updated++))
+            else
+              # update-branch exits non-zero when PR is already up-to-date
+              # or has merge conflicts — both are non-fatal.
+              echo "- Skipped PR #$pr (up-to-date or conflicts)"
+              ((skipped++))
+            fi
+          done
+
+          echo ""
+          echo "Summary: $updated updated, $skipped skipped, $failed failed"
